@@ -2,48 +2,48 @@ use secp256k1::{Secp256k1, Message, SecretKey, PublicKey};
 use sha2::{Sha256};
 use sha2::Digest;
 use std::fmt::Write;
-use hex_literal::hex;
 
-fn main() {
-    println!("Hello, world!");
-    let secp = Secp256k1::new();
-    let secret_key = SecretKey::from_slice(&[0xcd; 32]).expect("32 bytes, within curve order");
-    let public_key = PublicKey::from_secret_key(&secp, &secret_key);
+fn main() {}
 
-    println!("{:?}", secret_key);
-    println!("{:?}", public_key);
+const ALICE: [u8; 32] = [0x18,0xa8,0x6a,0x6c,0x8a,0x38,0x18,0x28,
+                         0x4b,0x5b,0x3a,0xb6,0x81,0xf9,0xce,0x15,
+                         0x51,0x73,0xf5,0xb2,0x22,0x37,0x6d,0xd7,
+                         0xa3,0x58,0xf4,0xf0,0x77,0x40,0x1b,0x59];
 
-    //let message = Message::from_hashed_data::<sha256::Hash>("Hello World!".as_bytes());
-    // This is unsafe unless the supplied byte slice is the output of a cryptographic hash function.
-    // See the above example for how to use this library together with bitcoin_hashes.
-    let message = Message::from_slice(&[0xab; 32]).expect("32 bytes");
+const BOB: [u8; 32]   = [0x19,0xa8,0x6a,0x6c,0x8a,0x38,0x18,0x28,
+                         0x4b,0x5c,0x3a,0xb6,0x81,0xf9,0xce,0x15,
+                         0x51,0x73,0xf5,0xb2,0x22,0x37,0x6d,0xd7,
+                         0xa3,0x58,0xf4,0xf0,0x77,0x40,0x1b,0x59];
 
-    let sig = secp.sign_ecdsa(&message, &secret_key);
-    assert!(secp.verify_ecdsa(&message, &sig, &public_key).is_ok());
-
-    // create a Sha256 object
-    let mut hasher = Sha256::new();
-
-    // write input message
-    hasher.update(b"hello world");
-
-    // read hash digest and consume hasher
-    let result = hasher.finalize();
-    println!("Hash = {:?}", result);
-
-    let message = Message::from_slice(&result).expect("32 bytes");
-    let sig = secp.sign_ecdsa(&message, &secret_key);
-
-    let mut hasher = Sha256::new();
-    hasher.update(b"Hello world");
-    let result = hasher.finalize();
-    let message = Message::from_slice(&result).expect("32 bytes");
-    assert!(secp.verify_ecdsa(&message, &sig, &public_key).is_err());
-
-    let result_a: [u8; 32] = result.as_slice().try_into().expect("Wrong length");
-    println!("{}", get_hex_string(result_a));
-
+struct TxIn {
+    outpoint: TxOut,
 }
+
+struct TxOut {
+    value: u8,
+    pubkey: [u8; 65]
+}
+
+struct Tx {
+    inputs: Vec<TxIn>,
+    outputs: Vec<TxOut>
+}
+
+impl Tx {
+    fn serialize(&self) -> Vec<u8> {
+        let mut sol = Vec::<u8>::new();
+        for tx_in in &self.inputs {
+            sol.push(tx_in.outpoint.value);
+            sol.extend(tx_in.outpoint.pubkey);
+        }
+        for tx_out in &self.outputs {
+            sol.push(tx_out.value);
+            sol.extend(tx_out.pubkey);
+        }
+        sol
+    }
+}
+
 
 fn get_hex_string(bytes: [u8; 32]) -> String {
     let mut s = String::with_capacity(2 * 32);
@@ -88,4 +88,39 @@ fn generate_keys_with_seed() {
                                0x79,0xfa,0xbe,0x9a,0x20,0x7f,0x07,0xcb,0xf5];
 
     assert!(public_key_expected == public_key.serialize_uncompressed());
+}
+
+#[test]
+fn sign_and_verify_tx() {
+    let secp = Secp256k1::new();
+    let secret_key_alice = SecretKey::from_slice(&ALICE).expect("32 bytes, within curve order");
+    let public_key_alice = PublicKey::from_secret_key(&secp, &secret_key_alice);
+
+    let secret_key_bob = SecretKey::from_slice(&BOB).expect("32 bytes, within curve order");
+    let public_key_bob = PublicKey::from_secret_key(&secp, &secret_key_bob);
+
+    // This is for example and old UTXO transaction that Alice received 
+    let tx_out_alice = TxOut {value: 50, pubkey: public_key_alice.serialize_uncompressed()};
+
+    let tx_in = TxIn {outpoint: tx_out_alice};
+    let tx_out_1 = TxOut {value: 20, pubkey: public_key_bob.serialize_uncompressed()};
+    let tx_out_2 = TxOut {value: 30, pubkey: public_key_alice.serialize_uncompressed()};
+
+    let tx = Tx {inputs: vec![tx_in], outputs: vec![tx_out_1, tx_out_2]};
+    let tx_serial = tx.serialize();
+
+    let mut hasher = Sha256::new();
+    hasher.update(tx_serial);
+    let hash = hasher.finalize();
+
+    let message = Message::from_slice(&hash).expect("32 bytes");
+    let sig = secp.sign_ecdsa(&message, &secret_key_alice);
+
+    assert!(secp.verify_ecdsa(&message, &sig, &public_key_alice).is_ok());
+
+    // Sign TX by Bob
+    let message = Message::from_slice(&hash).expect("32 bytes");
+    let sig = secp.sign_ecdsa(&message, &secret_key_bob);
+
+    assert!(secp.verify_ecdsa(&message, &sig, &public_key_alice).is_err());
 }
